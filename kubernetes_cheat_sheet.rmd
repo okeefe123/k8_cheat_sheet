@@ -1203,15 +1203,15 @@ spec:
     volumeMounts:
       - mountPath: /opt
         name: data-volume
-    volumes:
-    - name: data-volume
-      hostPath:
-        path: /data
-        type: Directory
-      -OR-
-      awsElasticBlockStore:
-        volumeID: <volume-id>
-        fsType: ext4
+  volumes:
+  - name: data-volume
+    hostPath:
+      path: /data
+      type: Directory
+    -OR-
+    awsElasticBlockStore:
+      volumeID: <volume-id>
+      fsType: ext4
 ```
 
 </div>
@@ -1264,7 +1264,7 @@ spec:
 <div class="col-md-6">
 ```
 apiVersion: v1
-kind: Persistent-Volume-Claim
+kind: PersistentVolumeClaim
 metadata:
   name: myClaim
 spec:
@@ -1298,3 +1298,175 @@ spec:
 * When a PVC is deleted, the PV is set to retain by default via `persistentVolumeReclaimPolicy: Retain` (Retain, Delete, Recycle-data gets scrubbed)
 </div>
 </div>
+
+\
+
+## Storage Classes
+
+* Storage classes automatically provision persistent volumes when an application needs them
+ 
+* Can define a provisioner (ex: Google Storage) that can automatically provision storage when a PVC is made (Dynamic Provisioning)
+
+* In this way, manually creating a PV is no longer necessary! Rather than automatically identifying an already existing PV, one is spun up by the provisioner and linked via `storageClassName:` in the PVC
+
+* SC (name) <--> (storageClassName) PVC (name) <--> (claimName) Pod 
+
+* Each volume plugin has its own set of parameters for the SC... make sure you refer to appropriate documentation when tweaking them
+
+\
+
+<div class="row">
+<div class="col-md-6">
+```
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: myclaim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: google-storage
+  resources:
+    requests:
+      storage: 500Mi
+---
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: google-storage
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-standard
+  replication-type: none
+```
+</div>
+<div class="col-md-6">
+```
+apiVersion: v1
+kind: Pod
+metadata:
+  name: random-number-generator
+spec:
+  containers:
+  - image: alpine
+    name: alpine
+    command: ["/bin/sh", "-c"]
+    args: ["shuf -i 0-100 -n 1 >> /opt/number.out ;"]
+    volumeMounts:
+    - mountPath: /opt
+      name: data-volume
+  volumes:
+  - names: data-volume
+    persistentVolumeClaim:
+      claimName: myclaim
+```
+</div>
+</div>
+
+\
+
+## Stateful Sets
+
+* Do everything deployments can do, BUT pods are deployed in a sequential order! 
+
+* Assigns unique original index for each pod in the order in which they were deployed
+
+* Assigns meaningful names to each pod (as opposed to a random hash), maintaining a "sticky" identity
+
+* If a deployment is scaled up, the most recent pod created will be cloned
+
+<b>Note:</b> This is especially useful when setting up a replicated read database where the master is updated first, the first worker is replicated from this, then all other workers are replicated from the first worker. They are able to identify which IP is master to set up continuous replication moving forward. <b>This would be impossible with the random names of deployments!</b>
+
+* Created in exactly the same way as a deployment, but with `kind: StatefulSet` and `serviceName: <headless-service-name>` as an argument under `spec:`
+
+\
+
+### Headless Services
+
+* A service that does not load balance requests, but gives a DNS entry to reach each pod (ex: in above note, we'd only want to write to the master pod!)
+
+* Web application can then use this DNS to directly point to the pod, where they are numbered by index (i.e. master = 0)
+
+* To create a headless service, need to specify `clusterIP: None` in the service file and the `subdomain:` and `hostname:` in the pod definition. This will give all the pods the same DNS though!
+
+  * Instead, we can omit the `subdomain:` and `hostname:`, add in a `serviceName:` argument under `spec:`, and turn the Deployment into a StatefulSet (see below). This object will automatically assign pod names in a meaningful way (as explained above!)
+
+* DNS: `<pod-name>-<pod-idx>.<headless-service-name>.default.svc.cluster.local`
+
+\
+
+\
+
+<div class="row">
+<div class="col-md-6">
+```
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-h
+spec:
+  ports:
+    - port: 3306
+  selector:
+    app: mysql
+  clusterIP: None
+```
+\
+\
+\
+\
+\
+\
+\
+
+### Storage in Stateful Sets
+
+* Useful if you want to consistent connections between stateful pods and volumes.
+
+* Rather than have its own YAML, the PVC is defined as a template within `volumeClaimTemplates:`
+
+* Creation goes pod -> PVC -> SC for each replica
+
+* Because volumeClaimTemplates is an array, you can specify multiple volume claim templates (i.e. pods with multiple containers and thus multiple volume mounts can be associated with their own vCTs)
+
+</div>
+<div class="col-md-6">
+```
+apiVersion: v1
+kind: StatefulSet
+metadata:
+  name: mysql-deployment
+  labels:
+    app: mysql
+spec:
+  serviceName: mysql-h
+  replicas: 3
+  matchLabels:
+    app: mysql
+  template:
+    metadata:
+      name: myapp-pod
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - image: mysql
+        name: mysql
+        volumeMounts:
+        - mountPath: /var/lib/mysql
+          name: data-volume
+  volumeClaimTemplates:
+  - metadata:
+      name: data-volume
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      storageClassName: google-storage
+      resources:
+        requests:
+          storage: 500Mi
+```
+</div>
+</div>
+
