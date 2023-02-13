@@ -99,6 +99,16 @@ volumes:
 
 \
 
+Can also define a secret via certificates with the implicit command:
+
+```
+kubectl create secret <secret_type> <secret_name> \
+  --cert "<cert_path>" \
+  --key  "<key_path>"
+```
+
+\
+
 ## Security Contexts
 Under spec in pod yaml, can set the security for a user on the docker image for the pod:
 
@@ -1470,3 +1480,393 @@ spec:
 </div>
 </div>
 
+\
+\
+
+# Docker
+
+* Useful for holding the same exact virtual environment and ensuring that applications run the same exact way on all machines (virtual or physical)
+
+* All Dockerfiles must start with a `FROM` statement, where we base our image off another image OR OS
+
+* Builds image in layers, where each instruction creates a new layer (below ex has 5 layers)
+
+* If a particular step fails, a rebuild will use already successfully layers up to that point to improve speed of build
+
+* Can containerize all the things! 
+
+<div class="row">
+<div class="col-md-6">
+<b>Basic Flask Image:</b>
+
+<ol>
+<li> OS - Ubuntu
+<li> Update apt repo
+<li> Install dependencies using apt
+<li> Install Python dependencies using pip
+<li> Copy source code to /opt folder
+<li> Run the web server using "flask" command
+<li> Build the image from the Dockerfile
+<li> Push to registry
+</ol>
+</div>
+<div class="col-md-6">
+```
+FROM Ubuntu
+
+RUN apt-get update
+RUN apt-get install python
+
+RUN pip install flask
+RUN pip install flask-mysql
+
+COPY . /opt/source-code
+
+ENTRYPOINT FLASK_APP=/opt/source-code/app.py flask run
+```
+```
+docker build Dockerfile -t okeefe/my-custom-app
+docker push okeefe/my-custom-app
+```
+</div></div>
+
+\
+
+## Common Commands
+
+View available images and their properties: `docker images`
+
+Start a container: `docker start <container>`
+
+(-i: Attach to STDOUT)
+
+Run a command against the container: `docker exec <container> <command>`
+
+Drop into a shell prompt: `docker exec -it <container> <shell>`
+
+Copy a file to the container: `docker cp <source> <container>:<destination>`
+
+Copy from a container to localhost: `<container>:<source> <destination>`
+
+Stop a container: `docker stop <container>`
+
+Restart a container: `docker restart <container>`
+
+Remove a container: `docker rm <container>`
+
+Remove all stopped containers: `docker container prune`
+
+Rename a container: `docker rename <container> <new-name>`
+
+View a container's metrics: `stats <container>`
+
+View container information: `docker inspect <container>`
+
+Create container image: `docker commit <container> <name>`
+
+Map container port to host server: `docker run -p <host_port>:<container_port> container`
+
+
+\
+\
+
+# Authentication, Authorization, and Admission Control
+
+## Authentication
+
+* How do we secure access to the Kubernetes cluster via authentication mechanisms?
+
+* Administrative purposes, NOT necessarily the end users within the application itself
+
+* K8 relies on external sources for users, so you can't list out these users (except possibly via serviceaccounts)
+
+* kube-apiserver can be authenticated via:
+
+  * <b>static password file:</b> list of users/passwords in csv files. Pass (password, username, user id) and pass it via `--basic-auth-file=user-details` in the kube-apiserver.service file. If using the Kubeadm tool to set up cluster, need to put this under `containers: -command:` within pod file. Finally, to authenticate the user in the csv, run a curl command with a tag `-u "user1:password123"`
+  
+  * <b>static token file:</b> can add in an additional "group" column that connects to a user-token-details file. This can then be referenced within curl commands via `--header "Authorization: Bearer <token-here>"`
+  
+  
+## KubeConfig
+
+<div class="row">
+<div class="col-md-6">
+
+* When a certificate has been set up within a K8 cluster, that user will have to provide their credentials (server, client-key, client-certificate, certificate-authority) as options every time they run a command
+
+* Can leverage KubeConfig in order to store these credentials in a file and then simply reference them with a single argument
+
+* OR EVEN BETTER, put the config file in the appropriate path and we won't even need to reference kubeconfig (what is set up by default)
+
+</div>
+<div class="col-md-6">
+```
+# Config File ($HOME/.kube/config)
+--server my-kube-playground:6443
+--client-key admin.key
+--client-certificate admin.crt
+--certificate-authority ca.crt
+```
+
+```
+kubectl get pods
+  --kubeconfig config
+```
+</div>
+</div>
+
+\
+
+<b>Contexts:</b>
+
+<div class="row">
+<div class="col-md-6">
+```
+apiVersion: v1
+kind: Config
+current-context: dev-user@google
+clusters:
+- name: my-kube-playground
+  cluster:
+    certificate-authority: ca.crt
+    server: https://my-kube-playground:6443
+- name: development
+  ...
+- name: production
+  ...
+- name: google
+  ...  
+contexts:
+- name: my-kube-admin@my-kube-playground
+  context:
+    cluster: my-kube-playground
+    user: my-kube-admin
+    namespace: finance
+- name: dev-user@google
+  ...
+- name: prod-user@production
+  ...
+
+users:
+- name: my-kube-admin
+  user:
+    client-certificate: admin.crt
+    client-key: admin.key
+- name: admin
+  ...
+- name: dev-user
+  ...
+- name: prod-user
+  ...
+```
+</div>
+<div class="col-md-6">
+* Contexts form the connection between the cluster and the user in question
+
+* Which context should kubectl start with? `current-context:`
+
+* View current file being used: `kubectl config view --kubeconfig=<custom-config-here>`
+
+* To use config operations on a config file that's not the default, specify via the `--kubeconfig` flag
+
+* Update context (edits the config file): `kubectl config use-context <context-here>`
+
+* Config file can also take on namespaces for a given context
+
+* Certificates for users: `/etc/kubernetes/pki/users`
+
+\
+
+
+![](./www/kubeconfig_example.png)
+</div>
+</div>
+
+\
+
+## Authorization
+
+* Once a user gains access to the cluster, what can they do?
+
+* Three types: 
+
+<ol>
+<li> Node Authorization:  setting up namespaces to authorize the kubelet to post commands to the kube API
+<li> Attribute-Based Authorization (ABAC): user/group of users is associated with rules defined in a json format; must be updated manually
+<li> Role-Based Authorization (RBAC): define a role with a set of permissions and then associate all relevant users with that role; roles can be updated and it propogates to the users
+<li> Webhook: a way to manage the authorization outside the k8 environment via an open policy agent
+</ol>
+
+* To identify the type of authorization or edit for a cluster, look for `authorization-mode` in the path: `/etc/kubernetes/manifests/kube-apiserver.yaml`
+
+\
+
+### Role-Based Access Controls
+
+
+<div class="row">
+<div class="col-md-6">
+
+* Must first define the role via `kind: Role`, then specify the associated users via `kind: RoleBinding`
+
+Role: 
+```
+kubectl create role <role-name> --verb=<comma-separated> --resource=<resource>
+```
+
+Rolebinding: 
+```
+kubectl create rolebinding <rolebinding-name> --role=<role-name> --user=<user-name>
+```
+
+* These are all created within the boundaries of namespaces (no assigned namespace means default)
+
+* As a user, can check for your own access via: `kubectl auth can-i <verb> <object>`
+
+* As admin, can add `--as <user-type> --namespace <namespace-here>` flag to test from their perspective for a specific namespace
+
+* `resourceNames:` allows the specific subset of objects that are allowed the permissions.
+
+</div>
+<div class="col-md-6">
+```
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+rules: 
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list", "get", "create", "update", "delete"]
+  resourceNames: ["blue", "orange"]
+- apiGroups: [""]
+  resources: ["ConfigMap"]
+  verbs: ["create"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devuser-developer-binding
+subjects:
+- kind: User
+  name: dev-user
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: developer
+  apiGroup: rbac.authorization.k8s.io
+```
+
+</div>
+</div>
+
+\
+
+### Cluster Roles
+
+* Resources are categorized either in terms of namespaces OR cluster scope
+
+* Namespaces: pods, replicasets, jobs, deployments, services, secrets, roles, rolebindings, configmaps, PVC
+```
+kubectl api-resources --namespaced=true
+```
+
+* Cluster Scopes: nodes, PV, clusterroles, clusterrolebindings, certificatesingingrequests, namespaces
+```
+kubectl api-resources --namespaced=false
+```
+
+* Clusterroles/clusterrolebindings are exactly the same concept as role/rolebinding and follow the same yaml/imperative syntax
+
+* While you can't assign namespaces to cluster-scoped objects, you CAN assign clusterroles to namespaced objects. In doing this, you are defining the permissions for the user for the object type across all namespaces
+
+
+\
+
+## Admission Controllers
+
+* While RBAC does allow the API-level restrictions, we can't really enforce how a cluster is used (ex: restricting images from a certain registry, permitting runs as root, only allowing pods to run certain capabilities)
+
+* Admission Controller Examples: AlwaysPullImages, DefaultStorageClass, EventRateLimit, NamespaceExists...
+
+* NamespaceExists: if we try as an admin to create a pod in a non-existent namespace "blue", admin status is authenticated, the capability of creating a pod is authorized, BUT the admission controller catches that "blue" does not exist and throws an error before the pod is created. If we enable the NamespaceAutoProvision controller, then this would actually create the nonexistent "blue" namespace.
+
+* View enabled admission controllers: `kube-apiserver -h | grep enable-admission-plugins` OR
+`ps -ef | grep kube-apiserver | grep admission-plugins`
+
+* From kubeADM: `kubectl exec kube-apiserver-controlplane -n kube-sytem -- kube-apiserver -h | grep enable-admission-plugins`
+
+* To update admission controllers, edit `/etc/kubernetes/manifests/kube-apiserver.yaml` such that the command options include `- --enable-admission-plugins=<comma-separated-controller-names>`
+
+\
+
+### Validating/Mutating Admission Controllers
+
+* A mutating ac can change (mutate) a request
+
+* A validating ac can validate a request before it is sent
+
+* Some AC's can be both
+
+* In some cases, order of ACs matter! The (mutating) NamespaceAutoProvision controller must be run before the (validating) Namespace exists controller else it will fail every time.
+
+<div class="row">
+<div class="col-md-6">
+<b>Create your own AC:</b> MutatingAdmissionWebhook, ValidatingAdmissionWebhook
+
+* Goes through the list until it hits the above Webhook titles
+
+* Makes a call to the admission webhook server by passing in an admission review object in json (user, verbs used, object details, etc...)
+
+* Webhook server responds with a "true" or false" json object
+
+* Need to (1) deploy a admission webhook server, then (2) create a webhook configuration object
+
+* Usually the server is custom created code with functions "mutate()/validate()". These contain the logic to verify a request and returns a json object
+
+</div>
+<div class="col-md-6">
+<center>
+![Example webhook server](./www/webhook_server_example.png)
+</center>
+</div>
+</div>
+
+\
+
+<div class="row">
+<div class="col-md-6">
+```
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: "pod-policy.example.com"
+webhooks:
+- name: "pod-policy.example.com"
+  clientConfig:
+    url: "https://external-server.com"
+    OR
+    service:
+      namespace: "webhook-namespace"
+      name: "webhook-service"
+    caBundle: "Cuasndj4sX...asdf59l"
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE"]
+      resources: ["pods"]
+      scope: "Namespaced"
+```
+</div>
+<div class="col-md-6">
+
+* We can then create a webhook-deployment pod that is exposed to the cluster via a service.
+
+* Put the service configuration (namespace/name) under `clientConfig:`, with `caBundle:` being the requirement that the server has to be configured with a certificate pair. 
+
+* `rules:` tell us when the webhook configuration should be called
+
+</div>
+</div>
