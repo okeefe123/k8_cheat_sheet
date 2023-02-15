@@ -593,11 +593,47 @@ Can either destroy instances, followed by recreating with newer... BAD!!! inacce
 
 Update a deployment: while there is an imperative command, best to go the declarative `apply` route so that the deployment is in agreement with the yaml file.
 
+Imperative: `kubectl scale deployment --replicas=<num-replicas> <deployment-name>`
+
 In an update, under the hood, a new replicaset is created with desired number of pods and the old pods are slowly terminated
 
 Undoing a rollout:
 
 `kubectl rollout undo deployment/myapp-deployment`
+
+\
+
+## Deployment Strategies:
+
+<b>Recreate</b>: Destroy all the pods and then recreate them
+
+<b>Rolling</b>: Take down older version and bring up newer version one-by-one (default!)
+
+<b>Blue/Green:</b>
+
+1) New version (Green) is deployed alongside the old version (Blue)
+
+2) While Blue continues to retain the traffic, Green undergoes a series of tests to ensure stability
+
+3) Once all the tests are passed, all the traffic is then diverted to Green at once
+
+* This strategy relies on labels and updating them. By deploying green to a different label, we just need to switch the service's label reference to that of the green deployment
+
+* In practice, this involves declaring a `version:` argument within the `selector:` in both the service and deployment objects
+
+<b>Canary:</b>
+
+1) Deploy the new version and route only small percentage of traffic to it
+
+2) Run tests to ensure stability
+
+3) Once all tests are passed, use the rolling updates strategy to switch to the new deployment
+
+* To have traffic moving to a small percentage, create a common label for both applications and reduce the number of replicas deployed in the new version
+
+* Traffic split will always be governed by the number of pods, though there are ways to do this with external applications!
+
+
 
 \
 
@@ -1870,3 +1906,175 @@ webhooks:
 
 </div>
 </div>
+
+\
+\
+
+# API Information
+
+* API groups: /metrics, /healthz, /version, /api, /apis, /logs
+
+* The objects that we create are held within /api and /apis (shown below)
+
+<div class = "row">
+<div class = "col-md-7">
+<center>
+![](./www/named_apis.png)
+</center>
+</div>
+<div class = "col-md-5">
+<center>
+![](./www/core_api.png)
+</center>
+</div>
+</div>
+
+\
+
+* Can find the list of api resources via command: `kubectl api-resources`
+
+* Each API has different versions; v1 is GA/stable, whereas there are also v1alpha1 (first developed and merged, can only be enabled via flags) and v1beta1 (major bugs fixed, commitment to be moved to GA in the future)
+
+* API groups can support multiple versions in the same time; "preferred" version is that set by default, "storage" version in which an object is stored in `etcd`
+
+* To enable versions of api groups (for ex: v2alpha1), you need to edit the kube-apiserver parameter with `--runtime-config=batch/v2alpha1` and restart the server
+
+\
+
+<b> API Depreciation Policy Rules:</b>
+<ol>
+<li> API elements may only be removed by incrementing the version of the API group
+<li> API objects must be able to round-trip between API versions in a given release without information loss, with the exception of whole REST resources that do not exist in some versions
+<li> An API version in a given track may not be deprecated until a new API version at least as stable is released
+<li> Other than most recent API versions in each track, older API versions must be supported after their announced deprecation for a duration of no less than GA:(12mo/3re) Beta:(9mo/3re) Alpha:(0re)
+<li> The preferred API version and the stored API version for a given group may not advance until after a release has been made that supports both the new version and the previous version
+</ol>
+
+* Converting yaml (may need to install plugin): `kubectl convert -f <old-file> --output-version <new-api>`
+
+\
+\
+
+# Custom Resources
+
+* We can use Custom Resource Definitions to create resources and place them into `etcd`. Below is the example for a "flight ticket" object
+
+<div class = "row">
+<div class = "col-md-6">
+```
+apiVersion: flights.com/v1
+kind: FlightTicket
+metadatta:
+  name: my-flight-ticket
+spec:
+  from: Mumbai
+  to: London
+  number: 2
+```
+
+* Need to first create the definition: `kubectl create -f flightticket-custom-def.yaml`
+
+* Then can create the object: `kubectl create -f flightticket.yaml`
+</div>
+<div class = "col-md-6">
+```
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: flighttickets.flights.com
+spec:
+  scope: Namespaced
+  group: flights.com
+  names:
+    kind: FlightTicket
+    singular: flightticket
+    plural: flighttickets
+    shortNames:
+      - ft
+  versions:
+    - name: v1
+      served: true
+      storage: true
+  schema:
+    openAPIV3Schema:
+      type: object
+    properties:
+      from:
+        type: string
+      to:
+        type: string
+      number:
+        type: integer
+        minimum: 1
+        maximum: 10
+```
+</div>
+</div>
+
+\
+
+* While we can now create this resource and store it in `etcd`, how do we actually do something with it?
+
+\
+
+<b>Custom Controllers: </b>
+
+* controller - any process or code that runs continuously and listens to k8 for specific objects being changed
+
+* would write code (ex: in Go) that listens to the API and builds logic about how to create everything (you probably need to figure out Go since there's a lot of support and repos for skeletons of Custom Controllers)
+
+* Can package this custom controller within a docker image and deploy it on a pod
+
+\
+
+<b>Operators: </b>
+
+* Can use the operator framework to package a CRD and a Custom Controller into one nice command
+
+* Ex: etcd operator has CRDs/Controllers for creating clustors, backing up etcd, and restoring etcd
+
+* Can find more information and applications to deploy in this way via <a href="https://www.operatorhub.io" target="_blank">OperatorHub.io</a>
+
+\
+\
+
+# Helm
+
+* A "package manager" for Kubernetes that allows us to view our applications as applications rather than a set of objects
+
+* All we have to do is tell what package we want, and it'll create all the needed objects to make the package work
+
+* Can specify customize desired app settings by declaring them at the time of install
+
+* There's a single location `values.yaml` where we can change all the applications
+
+* Can upgrade, rollback, and uninstall applications in a single line: `helm <verb> <application>`
+
+
+<b>Installation:</b>
+
+* Must have a functional k8 cluster and kubectl that works with it
+
+* <a href="https://helm.sh/docs/intro/install/#from-apt-debianubuntu" target="_blank">Click here</a> to find installation documentation for Ubuntu
+
+<b>Concepts:</b>
+
+* To turn yaml files into a Helm chart, should throw all of them into a `templates` directory and parameterize via `{{.Values.<variable-name>}}`
+
+* These values are stored in `values.yaml`. Can then just change the parameters in this single file
+
+* <a href="https://artifacthub.io" target="_blank">Artifacthub.io</a> is a community-driven public repository containing charts for desired applications
+
+* can also search via command line: `helm search hub <application-name>`
+
+* There are other repos! Add to helm via: `helm repo add bitnami https://charts.bitnami.com/bitnami` and then look via `helm search repo <application-name`
+
+* Install the chart: `helm install <release-name> <chart-name>` (release is essentially a unique label so that you can install multiple instances of the same chart)
+
+* Download but NOT install chart: `helm pull --untar bitnami/wordpress`
+
+* The above is useful to update the `values.yaml` before using the path of the files to install customized chart: `helm install release-4 ./wordpress`
+
+* List installed charts from repos: `helm repo list`
+
+* Uninstall helm chart: `helm uninstall <release-name>`
